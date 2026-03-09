@@ -14,7 +14,7 @@ from bot.keyboards.inline import (
 )
 from bot.states.states import OnboardingStates
 from db.models import User
-from db.repo import get_user_stats, get_user_mistakes, get_active_plan, save_learning_plan
+from db.repo import get_user_stats, get_user_mistakes, get_active_plan, save_learning_plan, toggle_reminder
 from services.ai.engine import generate_learning_plan
 
 router = Router()
@@ -44,17 +44,20 @@ async def show_progress(message: Message, session: AsyncSession):
 
     stats = await get_user_stats(session, user.id)
 
+    weaknesses = stats.get("weaknesses", [])
+    weak_str = ", ".join(weaknesses[:3]) if weaknesses else "пока нет данных"
+
     await message.answer(
-        f"📊 **Твой прогресс**\n\n"
+        f"📊 <b>Твой прогресс</b>\n\n"
         f"🎯 Уровень: {stats['level']}\n"
         f"🎓 Цель: {stats['goal']}\n"
         f"🔥 Серия дней: {stats['streak']}\n"
         f"📚 Уроков пройдено: {stats['completed_lessons']}\n"
         f"📖 Слов выучено: {stats['learned_words']}\n"
         f"❌ Всего ошибок: {stats['total_mistakes']}\n"
+        f"⚠️ Слабые темы: {weak_str}\n"
         f"⏱ Минут в день: {stats['daily_minutes']}\n"
         f"💎 Подписка: {stats['subscription']}",
-        parse_mode="Markdown",
     )
 
 
@@ -161,6 +164,19 @@ async def change_minutes(callback: CallbackQuery, state: FSMContext, session: As
         await callback.message.edit_text(
             "Сколько минут в день?", reply_markup=minutes_keyboard()
         )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "settings:reminder")
+async def toggle_reminder_setting(callback: CallbackQuery, session: AsyncSession):
+    result = await session.execute(
+        select(User).where(User.telegram_id == callback.from_user.id)
+    )
+    user = result.scalar_one_or_none()
+    if user:
+        new_state = await toggle_reminder(session, user.id)
+        status = "включены ✅" if new_state else "выключены ❌"
+        await callback.message.edit_text(f"🔔 Напоминания {status}")
     await callback.answer()
 
 
