@@ -159,6 +159,8 @@ async def get_user_stats(session: AsyncSession, user_id: int) -> dict:
     )
     total_mistakes = len(list(mistakes_result.scalars().all()))
 
+    weaknesses = await get_user_weaknesses(session, user_id)
+
     return {
         "level": user.current_level.value if user.current_level else "не определён",
         "goal": user.goal.value if user.goal else "не выбрана",
@@ -168,14 +170,37 @@ async def get_user_stats(session: AsyncSession, user_id: int) -> dict:
         "total_mistakes": total_mistakes,
         "daily_minutes": user.daily_minutes,
         "subscription": user.subscription.value,
+        "weaknesses": weaknesses,
     }
 
 
 async def increment_streak(session: AsyncSession, user_id: int) -> None:
+    result = await session.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        return
+    today = datetime.utcnow().date()
+    last_active = user.last_active_at.date() if user.last_active_at else None
+    if last_active == today:
+        return  # Already counted today
     await session.execute(
         update(User).where(User.id == user_id).values(streak_days=User.streak_days + 1)
     )
     await session.commit()
+
+
+async def toggle_reminder(session: AsyncSession, user_id: int) -> bool:
+    """Toggle reminders on/off. Returns new state."""
+    result = await session.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        return True
+    new_value = not user.reminder_enabled
+    await session.execute(
+        update(User).where(User.id == user_id).values(reminder_enabled=new_value)
+    )
+    await session.commit()
+    return new_value
 
 
 async def add_user_vocabulary(
