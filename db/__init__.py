@@ -2,6 +2,7 @@ from db.base import Base
 from db.models import (
     User,
     LearningGoal,
+    LearningPlan,
     LevelAssessment,
     Lesson,
     UserLesson,
@@ -17,6 +18,7 @@ __all__ = [
     "Base",
     "User",
     "LearningGoal",
+    "LearningPlan",
     "LevelAssessment",
     "Lesson",
     "UserLesson",

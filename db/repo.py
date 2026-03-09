@@ -7,6 +7,7 @@ from db.models import (
     CEFRLevel,
     DailyTask,
     GoalType,
+    LearningPlan,
     LevelAssessment,
     Mistake,
     User,
@@ -204,3 +205,55 @@ async def get_words_for_review(session: AsyncSession, user_id: int, limit: int =
         .limit(limit)
     )
     return list(result.scalars().all())
+
+
+async def get_active_plan(session: AsyncSession, user_id: int) -> LearningPlan | None:
+    result = await session.execute(
+        select(LearningPlan)
+        .where(LearningPlan.user_id == user_id, LearningPlan.active == True)
+        .order_by(LearningPlan.created_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def save_learning_plan(
+    session: AsyncSession,
+    user_id: int,
+    current_level: str,
+    target_level: str,
+    goal: str,
+    daily_minutes: int,
+    plan_text: str,
+) -> LearningPlan:
+    # Deactivate old plans
+    await session.execute(
+        update(LearningPlan)
+        .where(LearningPlan.user_id == user_id, LearningPlan.active == True)
+        .values(active=False)
+    )
+    plan = LearningPlan(
+        user_id=user_id,
+        current_level=current_level,
+        target_level=target_level,
+        goal=goal,
+        daily_minutes=daily_minutes,
+        plan_text=plan_text,
+    )
+    session.add(plan)
+    await session.commit()
+    await session.refresh(plan)
+    return plan
+
+
+async def get_user_weaknesses(session: AsyncSession, user_id: int) -> list[str]:
+    """Get top mistake categories for a user."""
+    from sqlalchemy import func as sqlfunc
+    result = await session.execute(
+        select(Mistake.category, sqlfunc.count(Mistake.id).label("cnt"))
+        .where(Mistake.user_id == user_id)
+        .group_by(Mistake.category)
+        .order_by(sqlfunc.count(Mistake.id).desc())
+        .limit(5)
+    )
+    return [row[0] for row in result.all()]

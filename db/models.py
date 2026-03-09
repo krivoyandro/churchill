@@ -204,3 +204,17 @@ class DailyTask(Base):
     score: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="daily_tasks")
+
+
+class LearningPlan(Base):
+    __tablename__ = "learning_plans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    current_level: Mapped[str] = mapped_column(String(10))
+    target_level: Mapped[str] = mapped_column(String(10))
+    goal: Mapped[str] = mapped_column(String(100))
+    daily_minutes: Mapped[int] = mapped_column(Integer)
+    plan_text: Mapped[str] = mapped_column(Text)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

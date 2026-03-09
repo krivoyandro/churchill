@@ -14,7 +14,7 @@ from bot.keyboards.inline import (
 )
 from bot.states.states import OnboardingStates
 from db.models import User
-from db.repo import get_user_stats, get_user_mistakes
+from db.repo import get_user_stats, get_user_mistakes, get_active_plan, save_learning_plan
 from services.ai.engine import generate_learning_plan
 
 router = Router()
@@ -106,16 +106,29 @@ async def show_plan(message: Message, session: AsyncSession):
     current_idx = level_order.index(current) if current in level_order else 0
     target = level_order[min(current_idx + 2, len(level_order) - 1)]
 
-    await message.answer("⏳ Генерирую персональный план...")
+    # Check for existing plan
+    existing_plan = await get_active_plan(session, user.id)
+    if existing_plan:
+        plan_text = existing_plan.plan_text
+        header = (
+            f"📖 <b>Твой план обучения</b>\n"
+            f"📅 Создан: {existing_plan.created_at.strftime('%d.%m.%Y')}\n"
+            f"🎯 {existing_plan.current_level} → {existing_plan.target_level}\n\n"
+        )
+    else:
+        await message.answer("⏳ Генерирую персональный план...")
+        plan_text = await generate_learning_plan(current, target, goal, minutes)
+        await save_learning_plan(session, user.id, current, target, goal, minutes, plan_text)
+        header = f"📖 <b>Твой план обучения</b>\n🎯 {current} → {target}\n\n"
 
-    plan = await generate_learning_plan(current, target, goal, minutes)
-
-    if len(plan) > 4000:
-        parts = [plan[i:i + 4000] for i in range(0, len(plan), 4000)]
+    full_text = header + plan_text
+    # Split long messages
+    if len(full_text) > 4000:
+        parts = [full_text[i:i + 4000] for i in range(0, len(full_text), 4000)]
         for part in parts:
             await message.answer(part)
     else:
-        await message.answer(f"📖 **Твой план обучения**\n\n{plan}", parse_mode="Markdown")
+        await message.answer(full_text)
 
 
 @router.message(F.text == "⚙️ Настройки")
