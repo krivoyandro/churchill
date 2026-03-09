@@ -1,14 +1,24 @@
+import logging
+
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.keyboards.inline import lesson_topic_keyboard, main_menu_keyboard, back_to_menu_keyboard
+from bot.keyboards.inline import lesson_topic_keyboard, main_menu_keyboard
 from bot.states.states import LessonStates
 from db.models import User
-from db.repo import save_user_lesson, complete_user_lesson
+from db.repo import (
+    save_user_lesson,
+    complete_user_lesson,
+    save_mistake,
+    get_user_weaknesses,
+    increment_streak,
+)
 from services.ai.engine import generate_lesson, check_answer
+
+logger = logging.getLogger(__name__)
 
 router = Router()
 
@@ -44,6 +54,8 @@ TOPIC_TITLES = {
     "academic_writing": "Academic Writing",
     "debate": "Debate & Argumentation",
 }
+
+MAX_ANSWERS_PER_LESSON = 5
 
 
 @router.message(F.text == "📚 Начать урок")
@@ -81,14 +93,21 @@ async def on_lesson_topic_chosen(callback: CallbackQuery, state: FSMContext, ses
 
     await callback.message.edit_text(f"⏳ Готовлю урок: {topic_title}...")
 
-    lesson_content = await generate_lesson(level, goal, topic_title)
+    # Fetch weaknesses to personalize lesson
+    weaknesses = await get_user_weaknesses(session, user.id)
+    weaknesses_str = ", ".join(weaknesses) if weaknesses else "пока не определены"
+
+    lesson_content = await generate_lesson(level, goal, topic_title, weaknesses=weaknesses_str)
 
     user_lesson = await save_user_lesson(session, user.id, topic_title, lesson_content)
     await state.set_state(LessonStates.in_lesson)
     await state.update_data(
         lesson_id=user_lesson.id,
         lesson_topic=topic_title,
+        lesson_content=lesson_content,
         user_id=user.id,
+        answer_count=0,
+        total_score=0.0,
     )
 
     # Split long messages (Telegram limit 4096 chars)
@@ -106,25 +125,68 @@ async def on_lesson_topic_chosen(callback: CallbackQuery, state: FSMContext, ses
     await callback.answer()
 
 
+async def _finish_lesson(message: Message, state: FSMContext, session: AsyncSession):
+    """Complete the lesson, save score, update streak."""
+    data = await state.get_data()
+    answer_count = data.get("answer_count", 0)
+    total_score = data.get("total_score", 0.0)
+    avg_score = total_score / answer_count if answer_count > 0 else None
+
+    await complete_user_lesson(session, data["lesson_id"], score=avg_score)
+    await increment_streak(session, data["user_id"])
+
+    summary = "📝 Урок завершён!\n"
+    if answer_count > 0:
+        summary += f"Ответов: {answer_count} | Средний балл: {avg_score:.0%}\n"
+    summary += "\nВозвращаюсь в меню."
+    await state.clear()
+    await message.answer(summary, reply_markup=main_menu_keyboard())
+
+
 @router.message(LessonStates.in_lesson)
 async def process_lesson_answer(message: Message, state: FSMContext, session: AsyncSession):
     if message.text and message.text.startswith("/menu"):
-        data = await state.get_data()
-        await complete_user_lesson(session, data["lesson_id"])
-        await state.clear()
-        await message.answer("Возвращаюсь в меню.", reply_markup=main_menu_keyboard())
+        await _finish_lesson(message, state, session)
         return
 
     data = await state.get_data()
     topic = data.get("lesson_topic", "")
+    lesson_content = data.get("lesson_content", "")
+
+    # Provide lesson context so AI knows what exercises were given
+    exercise_context = f"Тема урока: {topic}\n\nМатериал урока:\n{lesson_content[:2000]}"
 
     result = await check_answer(
-        exercise=f"Упражнение по теме: {topic}",
+        exercise=exercise_context,
         answer=message.text,
     )
 
+    # Save mistakes to DB
+    for m in result.get("mistakes", []):
+        await save_mistake(
+            session,
+            user_id=data["user_id"],
+            category=m.get("category", "other"),
+            original=m.get("original", ""),
+            corrected=m.get("corrected", ""),
+            explanation=m.get("explanation", ""),
+        )
+
+    # Track score
+    answer_count = data.get("answer_count", 0) + 1
+    total_score = data.get("total_score", 0.0) + result["score"]
+    await state.update_data(answer_count=answer_count, total_score=total_score)
+
     emoji = "✅" if result["correct"] else "❌"
-    await message.answer(
-        f"{emoji} Оценка: {result['score']:.0%}\n\n{result['explanation']}\n\n"
-        "Отправь следующий ответ или /menu для выхода."
-    )
+    response = f"{emoji} Оценка: {result['score']:.0%}\n\n{result['explanation']}"
+
+    if answer_count >= MAX_ANSWERS_PER_LESSON:
+        await message.answer(response)
+        await _finish_lesson(message, state, session)
+    else:
+        remaining = MAX_ANSWERS_PER_LESSON - answer_count
+        await message.answer(
+            f"{response}\n\n"
+            f"Ответ {answer_count}/{MAX_ANSWERS_PER_LESSON}. "
+            f"Отправь следующий ответ или /menu для выхода."
+        )
