@@ -9,7 +9,6 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from config import settings
 from bot.handlers import start, assessment, lessons, vocabulary, conversation, menu
 from bot.middlewares.db import DbSessionMiddleware
-from db.base import Base
 from db.session import engine
 from scheduler.reminders import setup_scheduler
 
@@ -21,9 +20,8 @@ logger = logging.getLogger(__name__)
 
 
 async def on_startup(bot: Bot):
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables created")
+    # Database schema is managed by Alembic migrations.
+    # Run `alembic upgrade head` before starting the bot.
     setup_scheduler(bot)
     logger.info("Bot started")
 
