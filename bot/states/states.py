@@ -20,3 +20,8 @@ class ConversationStates(StatesGroup):
 class VocabularyStates(StatesGroup):
     reviewing = State()
     learning_new = State()
+
+
+class DrillStates(StatesGroup):
+    drilling = State()
+    follow_up = State()

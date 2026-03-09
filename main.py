@@ -7,7 +7,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from config import settings
-from bot.handlers import start, assessment, lessons, vocabulary, conversation, menu
+from bot.handlers import start, assessment, lessons, vocabulary, conversation, menu, drill
 from bot.middlewares.db import DbSessionMiddleware
 from db.session import engine
 from scheduler.reminders import setup_scheduler
@@ -41,6 +41,7 @@ async def main():
     dp.include_router(start.router)
     dp.include_router(assessment.router)
     dp.include_router(lessons.router)
+    dp.include_router(drill.router)
     dp.include_router(vocabulary.router)
     dp.include_router(conversation.router)
     dp.include_router(menu.router)

@@ -183,8 +183,38 @@ async def increment_streak(session: AsyncSession, user_id: int) -> None:
     last_active = user.last_active_at.date() if user.last_active_at else None
     if last_active == today:
         return  # Already counted today
+    if last_active and (today - last_active).days > 1:
+        # Missed one or more days — reset streak
+        new_streak = 1
+    else:
+        new_streak = user.streak_days + 1
     await session.execute(
-        update(User).where(User.id == user_id).values(streak_days=User.streak_days + 1)
+        update(User).where(User.id == user_id).values(streak_days=new_streak)
+    )
+    await session.commit()
+
+
+async def get_mistakes_for_drill(
+    session: AsyncSession, user_id: int, limit: int = 5
+) -> list[Mistake]:
+    """Get recent mistakes for drill practice, prioritizing repeated ones."""
+    result = await session.execute(
+        select(Mistake)
+        .where(Mistake.user_id == user_id)
+        .order_by(Mistake.repeated.desc(), Mistake.created_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def increment_mistake_repeated(
+    session: AsyncSession, mistake_id: int
+) -> None:
+    """Increment the repeat counter for a mistake."""
+    await session.execute(
+        update(Mistake)
+        .where(Mistake.id == mistake_id)
+        .values(repeated=Mistake.repeated + 1)
     )
     await session.commit()
 

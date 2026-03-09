@@ -16,7 +16,7 @@ from db.repo import (
     get_user_weaknesses,
     increment_streak,
 )
-from services.ai.engine import generate_lesson, check_answer
+from services.ai.engine import generate_lesson, check_answer, generate_follow_up
 
 logger = logging.getLogger(__name__)
 
@@ -180,13 +180,34 @@ async def process_lesson_answer(message: Message, state: FSMContext, session: As
     emoji = "✅" if result["correct"] else "❌"
     response = f"{emoji} Оценка: {result['score']:.0%}\n\n{result['explanation']}"
 
+    # Generate follow-up exercise if there were mistakes
+    follow_up_text = ""
+    if not result["correct"] and result.get("mistakes"):
+        first_mistake = result["mistakes"][0]
+        try:
+            result_obj = await session.execute(
+                select(User).where(User.id == data["user_id"])
+            )
+            user_obj = result_obj.scalar_one_or_none()
+            level = user_obj.current_level.value if user_obj and user_obj.current_level else "A1"
+            follow_up_text = await generate_follow_up(
+                level=level,
+                category=first_mistake.get("category", "grammar"),
+                original=first_mistake.get("original", ""),
+                corrected=first_mistake.get("corrected", ""),
+                explanation=first_mistake.get("explanation", ""),
+            )
+            follow_up_text = f"\n\n🔁 Закрепи:\n{follow_up_text}"
+        except Exception:
+            pass  # Don't break lesson flow if follow-up fails
+
     if answer_count >= MAX_ANSWERS_PER_LESSON:
-        await message.answer(response)
+        await message.answer(response + follow_up_text)
         await _finish_lesson(message, state, session)
     else:
         remaining = MAX_ANSWERS_PER_LESSON - answer_count
         await message.answer(
-            f"{response}\n\n"
+            f"{response}{follow_up_text}\n\n"
             f"Ответ {answer_count}/{MAX_ANSWERS_PER_LESSON}. "
             f"Отправь следующий ответ или /menu для выхода."
         )

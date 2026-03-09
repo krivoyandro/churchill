@@ -129,6 +129,31 @@ async def generate_words(level: str, topic: str, count: int = 5) -> list[dict]:
     return words
 
 
+async def generate_drill_exercise(level: str, mistakes_summary: str) -> str:
+    """Generate a drill exercise based on user's weak spots."""
+    from services.ai.prompts import DRILL_EXERCISE_PROMPT
+    prompt = DRILL_EXERCISE_PROMPT.format(level=level, mistakes_summary=mistakes_summary)
+    return await _chat(
+        "Ты — преподаватель, создающий упражнения на закрепление.",
+        [{"role": "user", "content": prompt}],
+        temperature=0.5,
+    )
+
+
+async def generate_follow_up(level: str, category: str, original: str, corrected: str, explanation: str) -> str:
+    """Generate a follow-up exercise after a mistake."""
+    from services.ai.prompts import FOLLOW_UP_PROMPT
+    prompt = FOLLOW_UP_PROMPT.format(
+        level=level, category=category, original=original,
+        corrected=corrected, explanation=explanation,
+    )
+    return await _chat(
+        "Ты — преподаватель, закрепляющий материал после ошибки.",
+        [{"role": "user", "content": prompt}],
+        temperature=0.5,
+    )
+
+
 async def generate_learning_plan(
     current_level: str, target_level: str, goal: str, daily_minutes: int
 ) -> str:

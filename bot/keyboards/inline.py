@@ -39,8 +39,8 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(text="📚 Начать урок"), KeyboardButton(text="📖 Мой план")],
         [KeyboardButton(text="🔤 Слова"), KeyboardButton(text="💬 Практика диалога")],
-        [KeyboardButton(text="❌ Мои ошибки"), KeyboardButton(text="📊 Прогресс")],
-        [KeyboardButton(text="⚙️ Настройки")],
+        [KeyboardButton(text="🔁 Работа над ошибками"), KeyboardButton(text="❌ Мои ошибки")],
+        [KeyboardButton(text="📊 Прогресс"), KeyboardButton(text="⚙️ Настройки")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
