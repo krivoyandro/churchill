@@ -1,5 +1,7 @@
+import logging
+
 from aiogram import Router, F
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +16,7 @@ from bot.states.states import OnboardingStates
 from db.repo import get_or_create_user, update_user_goal, update_user_daily_minutes
 from db.models import GoalType
 
+logger = logging.getLogger(__name__)
 router = Router()
 
 GOAL_LABELS = {
@@ -30,12 +33,14 @@ GOAL_LABELS = {
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext, session: AsyncSession):
+    await state.clear()
     user = await get_or_create_user(
         session,
         telegram_id=message.from_user.id,
         username=message.from_user.username,
         first_name=message.from_user.first_name,
     )
+    logger.info("User %s (%s) started bot", user.telegram_id, user.first_name)
 
     if user.onboarding_complete:
         await message.answer(
@@ -46,7 +51,7 @@ async def cmd_start(message: Message, state: FSMContext, session: AsyncSession):
         return
 
     await message.answer(
-        "👋 Привет! Я — Churchill, твой AI-преподаватель английского.\n\n"
+        "👋 Привет! Я — <b>Churchill</b>, твой AI-преподаватель английского.\n\n"
         "Помогу выучить язык с нуля или довести до уверенного уровня.\n\n"
         "Для начала давай определим твою цель.\n"
         "Зачем тебе английский?",
@@ -84,11 +89,17 @@ async def on_minutes_chosen(callback: CallbackQuery, state: FSMContext, session:
     await update_user_daily_minutes(session, user_id, minutes)
     await state.update_data(daily_minutes=minutes)
 
+    goal_key = data.get("goal", "conversational")
+    goal_label = GOAL_LABELS.get(goal_key, goal_key)
+
     await callback.message.edit_text(
-        f"✅ Отлично! {minutes} минут в день — хороший режим.\n\n"
+        f"📋 <b>Твой профиль:</b>\n"
+        f"🎯 Цель: {goal_label}\n"
+        f"⏱ Время: {minutes} мин/день\n\n"
         "Теперь давай определим твой текущий уровень.\n"
         "Я задам несколько вопросов — от простых к сложным.\n"
         "Это займёт 2-3 минуты.",
         reply_markup=assessment_start_keyboard(),
     )
+    await state.set_state(OnboardingStates.showing_result)
     await callback.answer()

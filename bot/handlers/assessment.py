@@ -1,3 +1,5 @@
+import logging
+
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
@@ -7,26 +9,32 @@ from bot.keyboards.inline import main_menu_keyboard
 from bot.states.states import OnboardingStates
 from db.models import CEFRLevel
 from db.repo import update_user_level, save_assessment, set_onboarding_complete
-from services.ai.engine import run_assessment_step, parse_assessment_result
+from services.learning.assessment_data import (
+    ASSESSMENT_QUESTIONS,
+    LEVEL_ORDER,
+    get_question,
+    total_questions,
+    check_answer_deterministic,
+    calculate_level,
+)
+from services.ai.engine import check_free_answer
 
+logger = logging.getLogger(__name__)
 router = Router()
 
 
 @router.callback_query(F.data == "assessment:start")
 async def start_assessment(callback: CallbackQuery, state: FSMContext):
     await state.set_state(OnboardingStates.assessment_in_progress)
-    await state.update_data(assessment_history=[])
-
-    first_response = await run_assessment_step(
-        [{"role": "user", "content": "Начни тест для определения моего уровня английского."}]
+    await state.update_data(
+        q_index=0,
+        scores_by_level={},
     )
-    history = [
-        {"role": "user", "content": "Начни тест для определения моего уровня английского."},
-        {"role": "assistant", "content": first_response},
-    ]
-    await state.update_data(assessment_history=history)
 
-    await callback.message.edit_text(f"📝 Тест уровня\n\n{first_response}")
+    q = get_question(0)
+    await callback.message.edit_text(
+        f"📝 <b>Тест уровня</b> (1/{total_questions()})\n\n{q['text']}"
+    )
     await callback.answer()
 
 
@@ -53,47 +61,118 @@ async def skip_assessment(callback: CallbackQuery, state: FSMContext, session: A
 async def process_assessment_answer(message: Message, state: FSMContext, session: AsyncSession):
     data = await state.get_data()
     user_id = data["user_id"]
-    history = data.get("assessment_history", [])
+    q_index = data["q_index"]
+    scores = data.get("scores_by_level", {})
 
-    history.append({"role": "user", "content": message.text})
+    q = get_question(q_index)
+    if not q:
+        await _finish_assessment(message, state, session, user_id, scores)
+        return
 
-    response = await run_assessment_step(history)
-    history.append({"role": "assistant", "content": response})
-    await state.update_data(assessment_history=history)
+    level = q["level"]
+    if level not in scores:
+        scores[level] = {"correct": 0, "total": 0}
+    scores[level]["total"] += 1
 
-    # Check if assessment is complete
-    result = parse_assessment_result(response)
-    if result:
-        level = CEFRLevel(result["level"])
-        await update_user_level(session, user_id, level)
-        await save_assessment(
-            session,
-            user_id,
-            level,
-            score=(result["grammar_score"] + result["vocabulary_score"] + result["reading_score"]) / 3,
-            grammar_score=result["grammar_score"],
-            vocabulary_score=result["vocabulary_score"],
-            reading_score=result["reading_score"],
-            details=f"Strengths: {result['strengths']}\nWeaknesses: {result['weaknesses']}",
-        )
-        await set_onboarding_complete(session, user_id)
-        await state.clear()
-
-        # Clean response — remove the RESULT: lines for user display
-        display_text = response.split("RESULT:")[0].strip()
-
-        await message.answer(
-            f"📊 Тест завершён!\n\n"
-            f"{display_text}\n\n"
-            f"🎯 **Твой уровень: {level.value}**\n"
-            f"📗 Грамматика: {result['grammar_score']:.0%}\n"
-            f"📘 Словарный запас: {result['vocabulary_score']:.0%}\n"
-            f"📙 Чтение: {result['reading_score']:.0%}\n\n"
-            f"💪 Сильные стороны: {result['strengths']}\n"
-            f"🔧 Над чем работать: {result['weaknesses']}\n\n"
-            f"Готов начать обучение! 🚀",
-            parse_mode="Markdown",
-        )
-        await message.answer("Главное меню:", reply_markup=main_menu_keyboard())
+    # Check answer
+    if q["answers"]:
+        is_correct = check_answer_deterministic(q, message.text)
     else:
-        await message.answer(response)
+        is_correct = await check_free_answer(q["text"], message.text)
+
+    if is_correct:
+        scores[level]["correct"] += 1
+        feedback = "✅ Верно!"
+    else:
+        if q["answers"]:
+            feedback = f"❌ Неверно. Правильный ответ: <b>{q['answers'][0]}</b>"
+        else:
+            feedback = "❌ Не совсем."
+
+    next_index = q_index + 1
+
+    # Early stop: if user fails too many at current level, skip higher
+    level_stats = scores.get(level, {"correct": 0, "total": 0})
+    failed_at_level = level_stats["total"] - level_stats["correct"]
+    questions_at_level = sum(1 for qn in ASSESSMENT_QUESTIONS if qn["level"] == level)
+
+    should_stop_early = False
+    if level_stats["total"] >= questions_at_level and failed_at_level >= 2 and level != "A0":
+        should_stop_early = True
+
+    if next_index >= total_questions() or should_stop_early:
+        await message.answer(feedback)
+        await _finish_assessment(message, state, session, user_id, scores)
+        return
+
+    next_q = get_question(next_index)
+    if next_q and failed_at_level >= 2 and level != "A0":
+        current_level_idx = LEVEL_ORDER.index(level) if level in LEVEL_ORDER else 0
+        next_q_level_idx = LEVEL_ORDER.index(next_q["level"]) if next_q["level"] in LEVEL_ORDER else 0
+        if next_q_level_idx > current_level_idx:
+            await message.answer(feedback)
+            await _finish_assessment(message, state, session, user_id, scores)
+            return
+
+    await state.update_data(q_index=next_index, scores_by_level=scores)
+    await message.answer(
+        f"{feedback}\n\n"
+        f"📝 Вопрос {next_index + 1}/{total_questions()}\n\n{next_q['text']}"
+    )
+
+
+async def _finish_assessment(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    user_id: int,
+    scores: dict,
+):
+    """Calculate level and save results."""
+    level_str, sub_scores = calculate_level(scores)
+    level = CEFRLevel(level_str)
+
+    await update_user_level(session, user_id, level)
+
+    details = "; ".join(
+        f"{lvl}: {s['correct']}/{s['total']}"
+        for lvl in LEVEL_ORDER
+        if (s := scores.get(lvl)) and s["total"] > 0
+    )
+    await save_assessment(
+        session,
+        user_id,
+        level,
+        score=sub_scores["overall_score"],
+        grammar_score=sub_scores["grammar_score"],
+        vocabulary_score=sub_scores["vocabulary_score"],
+        reading_score=0.0,
+        details=details,
+    )
+    await set_onboarding_complete(session, user_id)
+    await state.clear()
+
+    breakdown = ""
+    for lvl in LEVEL_ORDER:
+        s = scores.get(lvl)
+        if s and s["total"] > 0:
+            emoji = "✅" if s["correct"] >= 2 else "❌"
+            breakdown += f"  {emoji} {lvl}: {s['correct']}/{s['total']}\n"
+
+    weak = [
+        lvl for lvl in LEVEL_ORDER
+        if (s := scores.get(lvl)) and s["total"] > 0 and s["correct"] < s["total"]
+    ]
+    weaknesses_text = ", ".join(weak) if weak else "нет явных"
+
+    await message.answer(
+        f"📊 <b>Тест завершён!</b>\n\n"
+        f"🎯 Твой уровень: <b>{level.value}</b>\n\n"
+        f"Результаты по уровням:\n{breakdown}\n"
+        f"📗 Грамматика: {sub_scores['grammar_score']:.0%}\n"
+        f"📘 Словарный запас: {sub_scores['vocabulary_score']:.0%}\n\n"
+        f"🔧 Над чем работать: {weaknesses_text}\n\n"
+        f"Готов начать обучение! 🚀",
+    )
+    await message.answer("Главное меню:", reply_markup=main_menu_keyboard())
+    logger.info("User %s assessed as %s", user_id, level.value)

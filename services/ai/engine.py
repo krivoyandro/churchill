@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 
 from openai import AsyncOpenAI
@@ -6,13 +7,15 @@ from openai import AsyncOpenAI
 from config import settings
 from services.ai.prompts import (
     CHECK_ANSWER_PROMPT,
+    CHECK_FREE_ANSWER_PROMPT,
     CONVERSATION_SYSTEM_PROMPT,
-    EXAMINER_SYSTEM_PROMPT,
     GENERATE_PLAN_PROMPT,
     GENERATE_WORDS_PROMPT,
     LESSON_SYSTEM_PROMPT,
     TEACHER_SYSTEM_PROMPT,
 )
+
+logger = logging.getLogger(__name__)
 
 
 client = AsyncOpenAI(api_key=settings.openai_api_key)
@@ -36,29 +39,17 @@ async def teacher_respond(user_message: str, context: str = "") -> str:
     return await _chat(system, [{"role": "user", "content": user_message}])
 
 
-async def run_assessment_step(conversation_history: list[dict]) -> str:
-    return await _chat(EXAMINER_SYSTEM_PROMPT, conversation_history, temperature=0.3)
-
-
-def parse_assessment_result(text: str) -> dict | None:
-    level_match = re.search(r"RESULT:LEVEL:(\w+)", text)
-    if not level_match:
-        return None
-
-    grammar = re.search(r"GRAMMAR_SCORE:([\d.]+)", text)
-    vocab = re.search(r"VOCABULARY_SCORE:([\d.]+)", text)
-    reading = re.search(r"READING_SCORE:([\d.]+)", text)
-    strengths = re.search(r"STRENGTHS:(.+)", text)
-    weaknesses = re.search(r"WEAKNESSES:(.+)", text)
-
-    return {
-        "level": level_match.group(1),
-        "grammar_score": float(grammar.group(1)) if grammar else 0.0,
-        "vocabulary_score": float(vocab.group(1)) if vocab else 0.0,
-        "reading_score": float(reading.group(1)) if reading else 0.0,
-        "strengths": strengths.group(1).strip() if strengths else "",
-        "weaknesses": weaknesses.group(1).strip() if weaknesses else "",
-    }
+async def check_free_answer(question: str, answer: str) -> bool:
+    """Use AI to evaluate a free-form assessment answer. Returns True/False."""
+    prompt = CHECK_FREE_ANSWER_PROMPT.format(question=question, answer=answer)
+    try:
+        result = await _chat(
+            "Ты — экзаменатор.", [{"role": "user", "content": prompt}], temperature=0.1
+        )
+        return "CORRECT:true" in result.lower()
+    except Exception as e:
+        logger.warning("AI check_free_answer failed: %s", e)
+        return False
 
 
 async def generate_lesson(level: str, goal: str, topic: str, weaknesses: str = "") -> str:
@@ -74,6 +65,7 @@ async def conversation_respond(level: str, history: list[dict]) -> str:
 
 
 async def check_answer(exercise: str, answer: str, correct_answer: str = "") -> dict:
+    """Check an exercise answer. Returns structured result with mistakes."""
     prompt = CHECK_ANSWER_PROMPT.format(
         exercise=exercise, answer=answer, correct_answer=correct_answer
     )
@@ -85,12 +77,31 @@ async def check_answer(exercise: str, answer: str, correct_answer: str = "") -> 
 
     # Remove control lines from explanation
     explanation = re.sub(r"CORRECT:(true|false)\n?", "", result, flags=re.IGNORECASE)
-    explanation = re.sub(r"SCORE:[\d.]+\n?", "", explanation).strip()
+    explanation = re.sub(r"SCORE:[\d.]+\n?", "", explanation)
+    explanation = re.sub(r"MISTAKES:.*", "", explanation, flags=re.DOTALL).strip()
+
+    # Extract structured mistakes
+    mistakes = []
+    mistakes_section = re.search(r"MISTAKES:(.*)", result, re.DOTALL)
+    if mistakes_section:
+        for line in mistakes_section.group(1).strip().split("\n"):
+            line = line.strip()
+            if not line or line == "none":
+                continue
+            parts = line.split("|")
+            if len(parts) >= 3:
+                mistakes.append({
+                    "category": parts[0].strip(),
+                    "original": parts[1].strip(),
+                    "corrected": parts[2].strip(),
+                    "explanation": parts[3].strip() if len(parts) > 3 else "",
+                })
 
     return {
         "correct": correct_match and correct_match.group(1).lower() == "true",
         "score": float(score_match.group(1)) if score_match else 0.5,
         "explanation": explanation,
+        "mistakes": mistakes,
     }
 
 
