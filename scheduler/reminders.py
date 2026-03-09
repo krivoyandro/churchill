@@ -20,6 +20,7 @@ async def send_daily_reminders(bot):
         result = await session.execute(
             select(User).where(
                 User.onboarding_complete == True,
+                User.reminder_enabled == True,
                 User.reminder_hour == current_hour,
             )
         )

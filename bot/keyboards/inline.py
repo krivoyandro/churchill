@@ -136,7 +136,7 @@ def back_to_menu_keyboard() -> InlineKeyboardMarkup:
 
 def settings_keyboard() -> InlineKeyboardMarkup:
     buttons = [
-        [InlineKeyboardButton(text="⏰ Время напоминания", callback_data="settings:reminder")],
+        [InlineKeyboardButton(text="🔔 Напоминания вкл/выкл", callback_data="settings:reminder")],
         [InlineKeyboardButton(text="🎯 Изменить цель", callback_data="settings:goal")],
         [InlineKeyboardButton(text="⏱ Время занятий", callback_data="settings:minutes")],
         [InlineKeyboardButton(text="📋 Пройти тест заново", callback_data="settings:retest")],

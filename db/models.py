@@ -61,6 +61,7 @@ class User(Base):
     )
     timezone: Mapped[str] = mapped_column(String(50), default="Europe/Moscow")
     reminder_hour: Mapped[int] = mapped_column(Integer, default=10)
+    reminder_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     onboarding_complete: Mapped[bool] = mapped_column(Boolean, default=False)
     streak_days: Mapped[int] = mapped_column(Integer, default=0)
     total_lessons: Mapped[int] = mapped_column(Integer, default=0)
