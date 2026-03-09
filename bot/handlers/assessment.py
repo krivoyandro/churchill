@@ -3,12 +3,13 @@ import logging
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.keyboards.inline import main_menu_keyboard
 from bot.states.states import OnboardingStates
-from db.models import CEFRLevel
-from db.repo import update_user_level, save_assessment, set_onboarding_complete
+from db.models import CEFRLevel, GoalType, User
+from db.repo import update_user_level, save_assessment, set_onboarding_complete, save_learning_plan
 from services.learning.assessment_data import (
     ASSESSMENT_QUESTIONS,
     LEVEL_ORDER,
@@ -17,10 +18,23 @@ from services.learning.assessment_data import (
     check_answer_deterministic,
     calculate_level,
 )
-from services.ai.engine import check_free_answer
+from services.ai.engine import check_free_answer, generate_learning_plan
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+# Maps goal → minimum target level the plan aims at
+_TARGET_BY_GOAL = {
+    GoalType.FROM_ZERO: "A2",
+    GoalType.CONVERSATIONAL: "B1",
+    GoalType.FOR_WORK: "B2",
+    GoalType.FOR_EXAM: "B2",
+    GoalType.FOR_TRAVEL: "A2",
+    GoalType.FOR_IT: "B1",
+    GoalType.FOR_MEDICINE: "B2",
+    GoalType.FOR_BUSINESS: "B2",
+    GoalType.FOR_EMIGRATION: "B1",
+}
 
 
 @router.callback_query(F.data == "assessment:start")
@@ -128,7 +142,7 @@ async def _finish_assessment(
     user_id: int,
     scores: dict,
 ):
-    """Calculate level and save results."""
+    """Calculate level, save results, auto-generate learning plan."""
     level_str, sub_scores = calculate_level(scores)
     level = CEFRLevel(level_str)
 
@@ -172,7 +186,36 @@ async def _finish_assessment(
         f"📗 Грамматика: {sub_scores['grammar_score']:.0%}\n"
         f"📘 Словарный запас: {sub_scores['vocabulary_score']:.0%}\n\n"
         f"🔧 Над чем работать: {weaknesses_text}\n\n"
-        f"Готов начать обучение! 🚀",
+        f"⏳ Составляю персональный план обучения...",
     )
-    await message.answer("Главное меню:", reply_markup=main_menu_keyboard())
+
+    # Auto-generate learning plan
+    try:
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one()
+        goal = user.goal.value if user.goal else "conversational"
+        daily_minutes = user.daily_minutes or 20
+
+        # Target = max(goal-based target, current+2 levels)
+        goal_target = _TARGET_BY_GOAL.get(user.goal, "B1")
+        current_idx = LEVEL_ORDER.index(level_str) if level_str in LEVEL_ORDER else 0
+        target_idx = max(
+            LEVEL_ORDER.index(goal_target) if goal_target in LEVEL_ORDER else 3,
+            min(current_idx + 2, len(LEVEL_ORDER) - 1),
+        )
+        target_level = LEVEL_ORDER[target_idx]
+
+        plan_text = await generate_learning_plan(level_str, target_level, goal, daily_minutes)
+        await save_learning_plan(
+            session, user_id, level_str, target_level, goal, daily_minutes, plan_text,
+        )
+
+        await message.answer(
+            f"📖 <b>Персональный план: {level_str} → {target_level}</b>\n\n{plan_text[:3500]}"
+        )
+    except Exception as e:
+        logger.warning("Failed to generate plan for user %s: %s", user_id, e)
+        await message.answer("📖 План можно посмотреть позже в меню «📖 Мой план».")
+
+    await message.answer("Готов начать обучение! 🚀", reply_markup=main_menu_keyboard())
     logger.info("User %s assessed as %s", user_id, level.value)

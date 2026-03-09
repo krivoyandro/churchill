@@ -59,7 +59,7 @@ class User(Base):
     subscription: Mapped[SubscriptionTier] = mapped_column(
         Enum(SubscriptionTier), default=SubscriptionTier.FREE
     )
-    timezone: Mapped[str] = mapped_column(String(50), default="Europe/Moscow")
+    timezone: Mapped[str] = mapped_column(String(50), default="UTC")
     reminder_hour: Mapped[int] = mapped_column(Integer, default=10)
     reminder_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     onboarding_complete: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -74,6 +74,7 @@ class User(Base):
     mistakes: Mapped[list["Mistake"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     assessments: Mapped[list["LevelAssessment"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     daily_tasks: Mapped[list["DailyTask"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    learning_plans: Mapped[list["LearningPlan"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
 class LearningGoal(Base):
@@ -211,7 +212,7 @@ class LearningPlan(Base):
     __tablename__ = "learning_plans"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     current_level: Mapped[str] = mapped_column(String(10))
     target_level: Mapped[str] = mapped_column(String(10))
     goal: Mapped[str] = mapped_column(String(100))
@@ -219,3 +220,5 @@ class LearningPlan(Base):
     plan_text: Mapped[str] = mapped_column(Text)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    user: Mapped["User"] = relationship(back_populates="learning_plans")
