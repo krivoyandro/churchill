@@ -13,7 +13,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: churchill
-      POSTGRES_PASSWORD: churchill
+      POSTGRES_PASSWORD: "0992717546"
       POSTGRES_DB: churchill
     volumes:
       - pgdata:/var/lib/postgresql/data

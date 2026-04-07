@@ -5,7 +5,7 @@ alembic==1.14.0
 openai==1.58.1
 redis==5.2.1
 apscheduler==3.10.4
-pydantic==2.10.3
+pydantic>=2.4.1,<2.10
 pydantic-settings==2.7.0
 python-dotenv==1.0.1
-aiohttp==3.11.11
+aiohttp>=3.9.0,<3.11
